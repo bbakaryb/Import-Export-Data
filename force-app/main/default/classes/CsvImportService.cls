@@ -1,186 +1,14 @@
-public with sharing class Import_Export_Data {
+public with sharing class CsvImportService {
 
-    @AuraEnabled
-    public static String exportCsv(String objectName, List<String> fields, String recordId) {
-        return CsvExportService.exportCsv(objectName, fields, recordId);
-    }
+    private static final Integer MAX_LINES = 5000;
 
-    @AuraEnabled
-    public static Map<String, Object> importCsv(String objectName, String base64Csv) {
-        return CsvImportService.importCsv(objectName, base64Csv);
-    }
-
-    @AuraEnabled(cacheable=true)
-    public static String getObjectApiNameFromRecordId(String recordId) {
-        if (String.isBlank(recordId) || recordId.length() < 3) {
-            throw new AuraHandledException('RecordId invalide.');
-        }
-        String prefix = recordId.substring(0,3);
-        Map<String, Schema.SObjectType> gd = Schema.getGlobalDescribe();
-        for (String sName : gd.keySet()) {
-            Schema.DescribeSObjectResult dsr = gd.get(sName).getDescribe();
-            if (prefix.equals(dsr.getKeyPrefix())) {
-                return sName;
-            }
-        }
-        throw new AuraHandledException('Unknow object.');
-    }
-
-    @AuraEnabled(cacheable=true)
-    public static List<FieldDescriptor> listFields(String objectName) {
-
-        List<FieldDescriptor> res = new List<FieldDescriptor>();
-
-        if (String.isBlank(objectName)) return null;
-        Schema.SObjectType st = Schema.getGlobalDescribe().get(objectName);
-        if (st == null) return null;
-
-        Set<String> technicalFields = new Set<String>{
-            'IsDeleted','CreatedDate','CreatedById',
-            'LastModifiedDate','LastModifiedById',
-            'SystemModstamp','LastActivityDate',
-            'LastViewedDate','LastReferencedDate'
-        };
-
-        Map<String, Schema.SObjectField> fmap = st.getDescribe().fields.getMap();
-
-        for (String apiName : fmap.keySet()) {
-            Schema.DescribeFieldResult dfr = fmap.get(apiName).getDescribe();
-            // Exclued Technical Field
-            if (technicalFields.contains(dfr.getName())) continue;
-            if (dfr.isCalculated()) continue;
-            if (dfr.isAutoNumber()) continue;
-            if (dfr.isHtmlFormatted()) continue;
-            // Exclued no csv pertinent type
-            Schema.DisplayType t = dfr.getType();
-            if (t == Schema.DisplayType.Location || t == Schema.DisplayType.Address || t == Schema.DisplayType.Base64 || t == Schema.DisplayType.EncryptedString) {
-                continue;
-            }
-            if (dfr.isAccessible()) {
-                res.add(new FieldDescriptor(apiName, dfr.getLabel()));
-            }
-        }
-        return res;
-    }
-
-    public with sharing class FieldDescriptor {
-        @AuraEnabled public String api;
-        @AuraEnabled public String label;
-
-        public FieldDescriptor(String api, String label) {
-            this.api = api;
-            this.label = label;
-        }
-    }
-
-/*
-    public static String escapeForCsv(Object input) {
-        if (input == null) return '';
-        String s = String.valueOf(input);
-        if (s.startsWith('(') && s.endsWith(')')) s = s.substring(1, s.length() - 1);
-        s = s.replace('\r', ' ').replace('\n', ' ');
-        Boolean needQuotes = s.contains(',') || s.contains('"');
-        if (s.contains('"')) s = s.replace('"', '""');
-        if (needQuotes) s = '"' + s + '"';
-        return s;
-    }
-
-private static List<String> parseCsvLine(String line) {
-        List<String> result = new List<String>();
-        Boolean inQuotes = false;
-        String current = '';
-
-        for (Integer i = 0; i < line.length(); i++) {
-            String c = line.substring(i, i + 1);
-
-            if (c == '"') {
-                // gestion des guillemets échappés ""
-                if (inQuotes && i + 1 < line.length() && line.substring(i + 1, i + 2) == '"') {
-                    current += '"';
-                    i++;
-                } else {
-                    inQuotes = !inQuotes;
-                }
-            } else if (c == ',' && !inQuotes) {
-                result.add(current);
-                current = '';
-            } else {
-                current += c;
-            }
-        }
-        result.add(current);
-        return result;
-    }
-
-@AuraEnabled
-    public static String exportCsv(String objectName, List<String> orderedFields, String recordId){
-        if (String.isBlank(objectName) || orderedFields == null || orderedFields.isEmpty()) {
-            throw new AuraHandledException('Objet et champs requis.');
-        }
-
-        Schema.SObjectType sType = Schema.getGlobalDescribe().get(objectName);
-        if (sType == null) {
-            throw new AuraHandledException('Objet inconnu: ' + objectName);
-        }
-
-        Schema.DescribeSObjectResult dsr = sType.getDescribe();
-        Map<String, Schema.SObjectField> fieldMap = dsr.fields.getMap();
-
-        // Champs autorisés (API names)
-        List<String> safeFields = new List<String>();
-
-        // En-têtes CSV (labels)
-        List<String> headers = new List<String>();
-
-        for (String f : orderedFields) {
-            if (fieldMap.containsKey(f)) {
-                Schema.DescribeFieldResult dfr = fieldMap.get(f).getDescribe();
-
-                if (dfr.isAccessible()) {
-                    safeFields.add(f);
-
-                    // ✅ Utilisation du LABEL du champ
-                    headers.add(escapeForCsv(dfr.getLabel()));
-                }
-            }
-        }
-
-        if (safeFields.isEmpty()) {
-            throw new AuraHandledException('Aucun champ accessible.');
-        }
-
-        String soql =
-            'SELECT ' + String.join(safeFields, ',') +
-            ' FROM ' + String.escapeSingleQuotes(objectName) +
-            ' WHERE Id = :recordId';
-
-        List<SObject> rows = Database.query(soql);
-
-        List<String> lines = new List<String>();
-
-        // Première ligne = labels
-        lines.add(String.join(headers, ','));
-
-        for (SObject r : rows) {
-            List<String> vals = new List<String>();
-            for (String f : safeFields) {
-                vals.add(escapeForCsv(r.get(f)));
-            }
-            lines.add(String.join(vals, ','));
-        }
-
-        String csvContent = String.join(lines, '\n');
-        return EncodingUtil.base64Encode(Blob.valueOf(csvContent));
-    }
-
-@AuraEnabled
     public static Map<String, Object> importCsv(String objectName, String base64Csv) {
         if (String.isBlank(objectName) || String.isBlank(base64Csv)) {
             throw new AuraHandledException('Object and file required.');
         }
 
         Boolean isUpdate = false; // INSERT
-        Integer MAX_LINES = 5000;
+        
 
         List<String> errors = new List<String>();
         List<SObject> toInsert = new List<SObject>();
@@ -198,14 +26,14 @@ private static List<String> parseCsvLine(String line) {
                 'Import limité à ' + MAX_LINES + ' lignes.'
             );
         }
-        // === Objet & describe === 
+        /* === Objet & describe === */
         Schema.SObjectType sType = Schema.getGlobalDescribe().get(objectName);
         if (sType == null) throw new AuraHandledException('Unknow object: ' + objectName);
 
         Schema.DescribeSObjectResult dsr = sType.getDescribe();
         Map<String, Schema.SObjectField> fieldMap = dsr.fields.getMap();
 
-        // === Mapping HEADER (label / api) → API NAME === 
+        /* === Mapping HEADER (label / api) → API NAME === */
         Map<String, String> headerToApi = new Map<String, String>();
         for (String api : fieldMap.keySet()) {
             Schema.DescribeFieldResult dfr = fieldMap.get(api).getDescribe();
@@ -213,21 +41,21 @@ private static List<String> parseCsvLine(String line) {
             headerToApi.put(dfr.getLabel().toLowerCase(), api);
         }
 
-        // === Headers CSV === 
+        /* === Headers CSV === */
         List<String> headers = new List<String>();
-        for (String h : parseCsvLine(lines[0])) {
+        for (String h : CsvUtils.parseLine(lines[0])) {
             headers.add(h.replace('"', '').trim().toLowerCase());
         }
 
         isUpdate = headers.contains('id');
 
-        // === Lines CSV === 
+        /* === Lines CSV === */
         for (Integer i = 1; i < lines.size(); i++) {
             String line = lines[i].trim();
             if (String.isBlank(line)) continue;
 
             Integer lineNumber = i + 1;
-            List<String> cols = parseCsvLine(line);
+            List<String> cols = CsvUtils.parseLine(line);
 
             //if (cols.size() != headers.size()) continue;
             if (cols.size() != headers.size()) {
@@ -248,7 +76,7 @@ private static List<String> parseCsvLine(String line) {
                 }
 
                 String apiField = headerToApi.get(header);
-                // === CAS SPÉCIAL : ID === 
+                /* === CAS SPÉCIAL : ID === */
                 if (apiField == 'Id') {
                     try {
                         record.put('Id', (Id) rawValue);
@@ -265,7 +93,7 @@ private static List<String> parseCsvLine(String line) {
                 if((!canWrite) || String.isBlank(rawValue)) continue;
 
                 try {
-                    // === PICKLIST : validation stricte === 
+                    /* === PICKLIST : validation stricte === */
                     if (dfr.getType() == Schema.DisplayType.Picklist || dfr.getType() == Schema.DisplayType.MultiPicklist) {
                         if (!isValidPicklistValue(dfr, rawValue)) {
                             errors.add('Ligne ' + lineNumber + ' – Champ "' + dfr.getLabel() + '" : valeur picklist invalide "' + rawValue + '"');
@@ -284,7 +112,7 @@ private static List<String> parseCsvLine(String line) {
                         
                     }
 
-                    // === AUTRES TYPES (Boolean inclus) === 
+                    /* === AUTRES TYPES (Boolean inclus) === */
                     Object typedValue = castToCorrectType(dfr, rawValue);
 
                     if (typedValue == null) {
@@ -305,7 +133,7 @@ private static List<String> parseCsvLine(String line) {
             
         }
 
-        // === STOP si erreurs === 
+        /* === STOP si erreurs === */
         if (!errors.isEmpty()) {
             return new Map<String, Object>{
                 'success' => false,
@@ -408,8 +236,4 @@ public static Object castToCorrectType(Schema.DescribeFieldResult dfr, Object ra
         return false;
     }
 
-
-*/
-    
 }
-

@@ -1,11 +1,11 @@
 <template>
-    <lightning-card title="DataPorter — Export CSV">
+    <lightning-card title="DataPorter — CSV Import / Export">
         <div class="slds-p-around_medium">
 
             <!-- Spinner -->
             <template if:true={isLoading}>
                 <lightning-spinner
-                    alternative-text="Export en cours..."
+                    alternative-text="Export in progress..."
                     size="medium">
                 </lightning-spinner>
             </template>
@@ -13,14 +13,14 @@
             <!-- Object selected -->
             <template if:true={selectedObject}>
                 <p class="slds-text-body_small slds-m-bottom_small">
-                    Objet détecté : <b>{selectedObject}</b>
+                    Object dected : <b>{selectedObject}</b>
                 </p>
             </template>
 
             <!-- field selected -->
             <template if:true={fields.length}>
                 <lightning-dual-listbox
-                    label="Field available"
+                    label="Available Fields"
                     source-label="Available"
                     selected-label="Selected"
                     options={fields}
@@ -30,7 +30,7 @@
 
                 <!-- Field order -->
                 <div class="slds-m-top_medium">
-                    <div class="slds-text-heading_small">Ordre des champs</div>
+                    <div class="slds-text-heading_small">Fields Order</div>
 
                     <template for:each={orderedFields} for:item="fld">
                         <div key={fld.value}
@@ -41,21 +41,21 @@
                             <div class="slds-button-group">
                                 <lightning-button-icon
                                     icon-name="utility:arrowup"
-                                    alternative-text="Monter"
+                                    alternative-text="Up"
                                     onclick={moveUp}
                                     data-index={fld.index}>
                                 </lightning-button-icon>
 
                                 <lightning-button-icon
                                     icon-name="utility:arrowdown"
-                                    alternative-text="Descendre"
+                                    alternative-text="Down"
                                     onclick={moveDown}
                                     data-index={fld.index}>
                                 </lightning-button-icon>
 
                                 <lightning-button-icon
                                     icon-name="utility:close"
-                                    alternative-text="Supprimer"
+                                    alternative-text="Remove"
                                     onclick={removeField}
                                     data-index={fld.index}>
                                 </lightning-button-icon>
@@ -68,7 +68,7 @@
             <!-- Export -->
             <lightning-button
                 class="slds-m-top_medium"
-                label="Exporter CSV"
+                label="Export CSV File"
                 variant="brand"
                 onclick={handleExport}
                 disabled={isLoading}>
@@ -85,13 +85,13 @@
             <div class="slds-m-top_large">
                 <lightning-input
                     type="file"
-                    label="Choice csv file"
+                    label="Select CSV file"
                     accept=".csv"
                     onchange={handleFileChange}>
                 </lightning-input>
 
                 <lightning-button
-                    label="Importe"
+                    label="Import CSV"
                     class="slds-m-top_small"
                     onclick={handleImport}>
                 </lightning-button>

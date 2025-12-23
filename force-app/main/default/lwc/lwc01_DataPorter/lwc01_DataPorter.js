@@ -15,6 +15,11 @@ export default class Lwc01_DataPorter extends LightningElement {
     isLoading = false;
     message = '';
 
+    /**
+     * Initialize component:
+     * - Detect object from recordId
+     * - Load available CSV-compatible fields
+     */
     connectedCallback() {
         if (this.recordId) {
             getObjectApiNameFromRecordId({ recordId: this.recordId })
@@ -23,31 +28,45 @@ export default class Lwc01_DataPorter extends LightningElement {
                     return listFields({ objectName: objName });
                 })
                 .then(flds => {
-                    this.fields = flds.map(f => ({ label: f, value: f }));
+                    // Dual-listbox expects { label, value }
+                    this.fields = flds.map(f => ({ label: f.label, value: f.api }));
                 })
                 .catch(err => {
-                    this.message = 'Erreur: ' + (err.body ? err.body.message : err.message);
+                    this.message = 'Error: ' + (err.body ? err.body.message : err.message);
                 });
         }
     }
 
+    /**
+     * Handle selection changes in the dual-listbox
+     * Maintain field order and display labels instead of API names
+     */
     handleFieldsChange(e) {
         this.selectedFields = e.detail.value;
         let newOrdered = [];
 
-        // Conserve precedent order
+        // Map API name → label for quick lookup
+        const labelByApi = new Map(
+            this.fields.map(f => [f.value, f.label])
+        );
+
+        // Preserve previous order when possible
         for (let ofld of this.orderedFields) {
             if (this.selectedFields.includes(ofld.value)) newOrdered.push(ofld);
         }
-        // Add new field in the end
+        // Add newly selected fields at the end
         for (let f of this.selectedFields) {
             if (!newOrdered.find(x => x.value === f)) {
-                newOrdered.push({ label: f, value: f, index: newOrdered.length });
+                newOrdered.push({ label: labelByApi.get(f), value: f, index: newOrdered.length });
             }
         }
+        // Recalculate indexes
         this.orderedFields = newOrdered.map((f, i) => ({ ...f, index: i }));
     }
 
+    /**
+     * Swap two fields in the order list
+     */
     swapOrder(i, j) {
         const tmp = this.orderedFields[i];
         this.orderedFields[i] = this.orderedFields[j];
@@ -55,16 +74,25 @@ export default class Lwc01_DataPorter extends LightningElement {
         this.orderedFields = this.orderedFields.map((f, idx) => ({ ...f, index: idx }));
     }
 
+    /**
+     * Move field up
+     */
     moveUp(evt) {
         const idx = parseInt(evt.target.dataset.index, 10);
         if (idx > 0) this.swapOrder(idx, idx - 1);
     }
 
+    /**
+     * Move field down
+     */
     moveDown(evt) {
         const idx = parseInt(evt.target.dataset.index, 10);
         if (idx < this.orderedFields.length - 1) this.swapOrder(idx, idx + 1);
     }
 
+    /**
+     * Remove field from selection
+     */
     removeField(evt) {
         const idx = parseInt(evt.target.dataset.index, 10);
         this.orderedFields.splice(idx, 1);
@@ -72,11 +100,14 @@ export default class Lwc01_DataPorter extends LightningElement {
         this.selectedFields = this.orderedFields.map(f => f.value);
     }
 
+    /**
+     * Export records to CSV
+     */
     async handleExport() {
         if (!this.selectedFields.length) {
             this.dispatchEvent(new ShowToastEvent({
                 title: 'Error',
-                message: 'Selected one field before export.',
+                message: 'Please select at least one field before exporting.',
                 variant: 'error'
             }));
             return;
@@ -86,7 +117,7 @@ export default class Lwc01_DataPorter extends LightningElement {
         try {
             const base64Data = await exportCsv({
                 objectName: this.selectedObject,
-                orderedFields: this.selectedFields,
+                fields: this.selectedFields,
                 recordId: this.recordId
             });
 
@@ -100,7 +131,7 @@ export default class Lwc01_DataPorter extends LightningElement {
 
             this.dispatchEvent(new ShowToastEvent({
                 title: 'Success',
-                message: 'Field export.',
+                message: 'CSV exported successfully',
                 variant: 'success'
             }));
         } catch (error) {
@@ -115,12 +146,18 @@ export default class Lwc01_DataPorter extends LightningElement {
         }
     }
 
+    /**
+     * Store selected CSV file
+     */
     handleFileChange(event) {
         if (event.target.files.length > 0) {
             this.file = event.target.files[0];
         }
     }
 
+    /**
+     * Import CSV file into Salesforce
+     */
     async handleImport() {
     if (!this.file) {
         alert('Selected CSV file.');
@@ -150,20 +187,42 @@ export default class Lwc01_DataPorter extends LightningElement {
                 base64Csv: base64Data
             });
 
+            /* Validation errors */
+            if (result.success === false) {
+                const errorMessage =
+                    result.errors && result.errors.length
+                        ? result.errors.join('\n')
+                        : 'Unknown CSV validation errors.';
+
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Import cancelled',
+                        message: errorMessage,
+                        variant: 'error',
+                        mode: 'sticky'
+                    })
+                );
+                return;
+            }
+
+            /* Success */
             this.dispatchEvent(
                 new ShowToastEvent({
-                    title: 'Import finished',
-                    message: `${result.inserted} success, ${result.failed} errors.`,
-                    variant: result.failed > 0 ? 'warning' : 'success'
+                    title: 'Import completed',
+                    message: `${result.inserted} records imported successfully.`,
+                    variant: 'success'
                 })
             );
+
         } catch (error) {
             console.error(error);
+
             this.dispatchEvent(
                 new ShowToastEvent({
-                    title: 'Import error',
+                    title: 'Server error',
                     message: error.body ? error.body.message : error.message,
-                    variant: 'error'
+                    variant: 'error',
+                    mode: 'sticky'
                 })
             );
         }
