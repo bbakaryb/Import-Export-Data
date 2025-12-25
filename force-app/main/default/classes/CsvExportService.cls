@@ -1,5 +1,8 @@
 public with sharing class CsvExportService {
     
+    /**
+     * Export a record to CSV (Base64 encoded)
+     */
     public static String exportCsv(String objectName, List<String> orderedFields, String recordId){
         if (String.isBlank(objectName) || orderedFields == null || orderedFields.isEmpty()) {
             throw new AuraHandledException('Object and field required.');
@@ -13,20 +16,18 @@ public with sharing class CsvExportService {
         Schema.DescribeSObjectResult dsr = sType.getDescribe();
         Map<String, Schema.SObjectField> fieldMap = dsr.fields.getMap();
 
-        // Champs autorisés (API names)
+        /* === Allowed field API names === */
         List<String> safeFields = new List<String>();
 
-        // En-têtes CSV (labels)
+        /* === CSV headers (field labels) === */
         List<String> headers = new List<String>();
 
         for (String f : orderedFields) {
             if (fieldMap.containsKey(f)) {
                 Schema.DescribeFieldResult dfr = fieldMap.get(f).getDescribe();
-
                 if (dfr.isAccessible()) {
                     safeFields.add(f);
-
-                    // ✅ Utilisation du LABEL du champ
+                    // Utilisation du LABEL du champ
                     headers.add(CsvUtils.escape(dfr.getLabel()));
                 }
             }
@@ -45,9 +46,9 @@ public with sharing class CsvExportService {
 
         List<String> lines = new List<String>();
 
-        // Première ligne = labels
+        /* === Header line === */
         lines.add(String.join(headers, ','));
-
+        /* === Data lines === */
         for (SObject r : rows) {
             List<String> vals = new List<String>();
             for (String f : safeFields) {

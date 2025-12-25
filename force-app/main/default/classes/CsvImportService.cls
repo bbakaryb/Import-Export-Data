@@ -1,19 +1,26 @@
 public with sharing class CsvImportService {
 
+    // Maximum number of CSV data lines allowed
     private static final Integer MAX_LINES = 5000;
 
+    /**
+     * Main CSV import entry point
+     * @param objectName API name of the target object
+     * @param base64Csv  Base64-encoded CSV file content
+     * @return Map containing success flag, errors or inserted count
+     */
     public static Map<String, Object> importCsv(String objectName, String base64Csv) {
         if (String.isBlank(objectName) || String.isBlank(base64Csv)) {
-            throw new AuraHandledException('Object and file required.');
+            throw new AuraHandledException('Object name and CSV file are required.');
         }
 
-        Boolean isUpdate = false; // INSERT
+        Boolean isUpdate = false; // INSERT by default
         
 
         List<String> errors = new List<String>();
         List<SObject> toInsert = new List<SObject>();
 
-        // Décodage
+        /* === Decode CSV === */
         String csv = EncodingUtil.base64Decode(base64Csv).toString();
 
         List<String> lines = csv.replace('\r\n', '\n').replace('\r', '\n').split('\n');
@@ -23,10 +30,10 @@ public with sharing class CsvImportService {
         }
         if (lines.size() - 1 > MAX_LINES) {
             throw new AuraHandledException(
-                'Import limité à ' + MAX_LINES + ' lignes.'
+                'CSV import limited to ' + MAX_LINES + ' lines.'
             );
         }
-        /* === Objet & describe === */
+        /* === Object describe === */
         Schema.SObjectType sType = Schema.getGlobalDescribe().get(objectName);
         if (sType == null) throw new AuraHandledException('Unknow object: ' + objectName);
 
@@ -41,15 +48,16 @@ public with sharing class CsvImportService {
             headerToApi.put(dfr.getLabel().toLowerCase(), api);
         }
 
-        /* === Headers CSV === */
+        /* === CSV headers === */
         List<String> headers = new List<String>();
         for (String h : CsvUtils.parseLine(lines[0])) {
             headers.add(h.replace('"', '').trim().toLowerCase());
         }
 
+        // Presence of Id column enables update/upsert mode
         isUpdate = headers.contains('id');
 
-        /* === Lines CSV === */
+        /* === Parse CSV data lines === */
         for (Integer i = 1; i < lines.size(); i++) {
             String line = lines[i].trim();
             if (String.isBlank(line)) continue;
@@ -59,7 +67,7 @@ public with sharing class CsvImportService {
 
             //if (cols.size() != headers.size()) continue;
             if (cols.size() != headers.size()) {
-                errors.add('Ligne ' + lineNumber + ' : nombre de colonnes incorrect.');
+                errors.add('Line ' + lineNumber + ' : incorrect number of columns.');
                 continue;
             }
 
@@ -71,18 +79,18 @@ public with sharing class CsvImportService {
                 String rawValue = cols[c].trim();
                 if(rawValue == null || rawValue == '' || String.isBlank(rawValue)) continue;
                 if (!headerToApi.containsKey(header)) {
-                    errors.add('Ligne ' + lineNumber + ' : colonne inconnue "' + header + '"');
+                    errors.add('Line ' + lineNumber + ' : unknow column "' + header + '"');
                     continue;
                 }
 
                 String apiField = headerToApi.get(header);
-                /* === CAS SPÉCIAL : ID === */
+                /* === special case : ID === */
                 if (apiField == 'Id') {
                     try {
                         record.put('Id', (Id) rawValue);
                         hasAtLeastOneValue = true;
                     } catch (Exception e) {
-                        errors.add('Ligne ' + lineNumber + ' : Id invalide "' + rawValue + '"');
+                        errors.add('Line ' + lineNumber + ' : invalid id "' + rawValue + '"');
                     }
                     continue;
                 }
@@ -93,13 +101,14 @@ public with sharing class CsvImportService {
                 if((!canWrite) || String.isBlank(rawValue)) continue;
 
                 try {
-                    /* === PICKLIST : validation stricte === */
+                    /* === PICKLIST : strict validation === */
                     if (dfr.getType() == Schema.DisplayType.Picklist || dfr.getType() == Schema.DisplayType.MultiPicklist) {
                         if (!isValidPicklistValue(dfr, rawValue)) {
-                            errors.add('Ligne ' + lineNumber + ' – Champ "' + dfr.getLabel() + '" : valeur picklist invalide "' + rawValue + '"');
+                            errors.add('Line ' + lineNumber + ' – field "' + dfr.getLabel() + '" : invalid picklist value "' + rawValue + '"');
                             continue;
                         }
                         if (dfr.getType() == Schema.DisplayType.MultiPicklist) {
+                            // Salesforce expects semicolon-separated values
                             record.put(apiField, rawValue.replace(',', ';'));
                             hasAtLeastOneValue = true;
                             continue;
@@ -112,11 +121,11 @@ public with sharing class CsvImportService {
                         
                     }
 
-                    /* === AUTRES TYPES (Boolean inclus) === */
+                    /* === Other field types (Boolean included) === */
                     Object typedValue = castToCorrectType(dfr, rawValue);
 
                     if (typedValue == null) {
-                        errors.add('Ligne ' + lineNumber + ' – Champ "' + dfr.getLabel() + '" : valeur invalide "' + rawValue + '"');
+                        errors.add('Line ' + lineNumber + ' – field "' + dfr.getLabel() + '" : invalid value "' + rawValue + '"');
                     } else {
                         record.put(apiField, typedValue);
                         hasAtLeastOneValue = true;
@@ -124,26 +133,25 @@ public with sharing class CsvImportService {
 
                 }
                 catch (Exception e) {
-                    errors.add('Ligne ' + lineNumber + ' – Champ "' + dfr.getLabel() + '" : ' + e.getMessage());
+                    errors.add('Line ' + lineNumber + ' – field "' + dfr.getLabel() + '" : ' + e.getMessage());
                 }
             }
+            // Ignore empty rows
             if (hasAtLeastOneValue) {
                 toInsert.add(record);
             }
             
         }
 
-        /* === STOP si erreurs === */
+        /* === STOP if errors === */
         if (!errors.isEmpty()) {
             return new Map<String, Object>{
                 'success' => false,
                 'errors' => errors
             };
         }
-
-        Database.UpsertResult[] results =
-            Database.upsert(toInsert, false);
-
+        /* === DML (upsert supports insert or update) === */
+        Database.UpsertResult[] results = Database.upsert(toInsert, false);
         Integer success = 0;
         Integer failed = 0;
 
@@ -161,7 +169,10 @@ public with sharing class CsvImportService {
         };
     }
 
-public static Object castToCorrectType(Schema.DescribeFieldResult dfr, Object rawValue) {
+    /**
+     * Convert raw CSV value to the correct Apex type
+     */
+    public static Object castToCorrectType(Schema.DescribeFieldResult dfr, Object rawValue) {
         if (rawValue == null) return null;
 
         try {
@@ -187,12 +198,10 @@ public static Object castToCorrectType(Schema.DescribeFieldResult dfr, Object ra
                         if (v == 'false' || v == '0' || v == 'no' || v == 'non') {
                             return false;
                         }
-                        // valeur invalide → rejet explicite
                         throw new IllegalArgumentException(
                             'Invalid boolean value: ' + rawValue
                         );
                     }
-                    // valeur invalide → rejet explicite
                     throw new IllegalArgumentException(
                         'Invalid boolean value: ' + rawValue
                     );
@@ -223,12 +232,14 @@ public static Object castToCorrectType(Schema.DescribeFieldResult dfr, Object ra
         return null;
     }
 
+    /**
+     * Validate picklist values (label or value, active only)
+     */
     public static Boolean isValidPicklistValue(Schema.DescribeFieldResult dfr, String value) {
         if (String.isBlank(value)) return true;
 
         for (Schema.PicklistEntry ple : dfr.getPicklistValues()) {
             if (!ple.isActive()) continue;
-
             if (ple.getValue().equalsIgnoreCase(value) || ple.getLabel().equalsIgnoreCase(value)) {
                 return true;
             }

@@ -89,6 +89,45 @@
                     accept=".csv"
                     onchange={handleFileChange}>
                 </lightning-input>
+<!-- CSV Preview -->
+<template if:true={showPreview}>
+    <div class="slds-m-top_large">
+        <h3 class="slds-text-heading_small slds-m-bottom_small">
+            CSV Preview (first {MAX_PREVIEW_ROWS} rows)
+        </h3>
+
+        <div class="slds-scrollable_x">
+            <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+                <thead>
+                    <tr>
+                        <template for:each={previewHeaders} for:item="header">
+                            <th key={header} scope="col">
+                                <div class="slds-truncate">{header}</div>
+                            </th>
+                        </template>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template for:each={previewRows} for:item="row">
+                        <tr key={row._rowKey}>
+                            <template for:each={row.cells} for:item="cell">
+                                <td key={cell.key}>
+                                    <div class="slds-truncate">
+                                        {cell.value}
+                                    </div>
+                                </td>
+                            </template>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+
+        <p class="slds-text-body_small slds-m-top_x-small">
+            Please verify column names and data before importing.
+        </p>
+    </div>
+</template>
 
                 <lightning-button
                     label="Import CSV"

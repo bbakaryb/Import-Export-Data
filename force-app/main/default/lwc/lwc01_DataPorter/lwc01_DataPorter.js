@@ -15,6 +15,14 @@ export default class Lwc01_DataPorter extends LightningElement {
     isLoading = false;
     message = '';
 
+    // Preview
+    previewHeaders = [];
+    previewRows = [];
+    showPreview = false;
+
+    MAX_PREVIEW_ROWS = 10;
+
+
     /**
      * Initialize component:
      * - Detect object from recordId
@@ -150,10 +158,32 @@ export default class Lwc01_DataPorter extends LightningElement {
      * Store selected CSV file
      */
     handleFileChange(event) {
-        if (event.target.files.length > 0) {
-            this.file = event.target.files[0];
+        if (event.target.files.length === 0) {
+            this.resetPreview();
+            return;
         }
+
+        this.file = event.target.files[0];
+
+        const reader = new FileReader();
+        reader.onload = () => {
+            const text = reader.result;
+            const preview = this.parseCsv(text);
+
+            this.previewHeaders = preview.headers;
+            this.previewRows = preview.rows;
+            this.showPreview = true;
+        };
+
+        reader.readAsText(this.file);
     }
+
+    resetPreview() {
+        this.previewHeaders = [];
+        this.previewRows = [];
+        this.showPreview = false;
+    }
+
 
     /**
      * Import CSV file into Salesforce
@@ -230,6 +260,63 @@ export default class Lwc01_DataPorter extends LightningElement {
 
     reader.readAsArrayBuffer(this.file);
 }
+
+parseCsv(text) {
+    const lines = text
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .split('\n')
+        .filter(l => l.trim());
+
+    if (!lines.length) {
+        return { headers: [], rows: [] };
+    }
+
+    const parseLine = (line) => {
+        const result = [];
+        let current = '';
+        let inQuotes = false;
+
+        for (let i = 0; i < line.length; i++) {
+            const c = line[i];
+
+            if (c === '"') {
+                if (inQuotes && line[i + 1] === '"') {
+                    current += '"';
+                    i++;
+                } else {
+                    inQuotes = !inQuotes;
+                }
+            } else if (c === ',' && !inQuotes) {
+                result.push(current);
+                current = '';
+            } else {
+                current += c;
+            }
+        }
+        result.push(current);
+        return result.map(v => v.replace(/^"|"$/g, '').trim());
+    };
+
+    const headers = parseLine(lines[0]);
+
+    const rows = [];
+    for (let i = 1; i < lines.length && rows.length < this.MAX_PREVIEW_ROWS; i++) {
+        const values = parseLine(lines[i]);
+
+        rows.push({
+            _rowKey: i,
+            cells: headers.map((h, idx) => ({
+                key: h,
+                value: values[idx] || ''
+            }))
+        });
+    }
+
+    return { headers, rows };
+}
+
+
 
 
 

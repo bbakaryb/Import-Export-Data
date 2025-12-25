@@ -1,9 +1,14 @@
 public with sharing class CsvUtils {
 
+    /**
+     * Escape a value for CSV output
+     */
     public static String escape(Object input) {
         if (input == null) return '';
         String s = String.valueOf(input);
+        // Remove surrounding parentheses
         if (s.startsWith('(') && s.endsWith(')')) s = s.substring(1, s.length() - 1);
+        // Normalize line breaks
         s = s.replace('\r', ' ').replace('\n', ' ');
         Boolean needQuotes = s.contains(',') || s.contains('"');
         if (s.contains('"')) s = s.replace('"', '""');
@@ -11,6 +16,9 @@ public with sharing class CsvUtils {
         return s;
     }   
    
+    /**
+     * Parse a single CSV line
+     */
     public static List<String> parseLine(String line) {
         List<String> result = new List<String>();
         Boolean inQuotes = false;
@@ -20,7 +28,7 @@ public with sharing class CsvUtils {
             String c = line.substring(i, i + 1);
 
             if (c == '"') {
-                // gestion des guillemets échappés ""
+                // Handle escaped quotes ""
                 if (inQuotes && i + 1 < line.length() && line.substring(i + 1, i + 2) == '"') {
                     current += '"';
                     i++;
@@ -38,6 +46,9 @@ public with sharing class CsvUtils {
         return result;
     }
 
+    /**
+     * Parse a full CSV string
+     */
     public static List<List<String>> parse(String csv) {
         List<List<String>> rows = new List<List<String>>();
         for (String line : csv.replace('\r\n', '\n').replace('\r', '\n').split('\n')) {
