@@ -89,45 +89,82 @@
                     accept=".csv"
                     onchange={handleFileChange}>
                 </lightning-input>
-<!-- CSV Preview -->
-<template if:true={showPreview}>
-    <div class="slds-m-top_large">
-        <h3 class="slds-text-heading_small slds-m-bottom_small">
-            CSV Preview (first {MAX_PREVIEW_ROWS} rows)
-        </h3>
+                <!-- CSV Preview -->
+                <template if:true={showPreview}>
+                    <div class="slds-m-top_large">
+                        <h3 class="slds-text-heading_small slds-m-bottom_small">
+                            CSV Preview (first {MAX_PREVIEW_ROWS} rows)
+                        </h3>
 
-        <div class="slds-scrollable_x">
-            <table class="slds-table slds-table_cell-buffer slds-table_bordered">
-                <thead>
-                    <tr>
-                        <template for:each={previewHeaders} for:item="header">
-                            <th key={header} scope="col">
-                                <div class="slds-truncate">{header}</div>
-                            </th>
-                        </template>
-                    </tr>
-                </thead>
-                <tbody>
-                    <template for:each={previewRows} for:item="row">
-                        <tr key={row._rowKey}>
-                            <template for:each={row.cells} for:item="cell">
-                                <td key={cell.key}>
-                                    <div class="slds-truncate">
-                                        {cell.value}
-                                    </div>
-                                </td>
-                            </template>
-                        </tr>
-                    </template>
-                </tbody>
-            </table>
-        </div>
+                        <div class="slds-scrollable_x">
+                            <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+                                <thead>
+                                    <tr>
+                                        <template for:each={previewHeaders} for:item="header">
+                                            <th key={header} scope="col">
+                                                <div class="slds-truncate">{header}</div>
+                                            </th>
+                                        </template>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template for:each={previewRows} for:item="row">
+                                        <tr key={row._rowKey}>
+                                            <template for:each={row.cells} for:item="cell">
+                                                <td key={cell.key}>
+                                                    <div class="slds-truncate">
+                                                        {cell.value}
+                                                    </div>
+                                                </td>
+                                            </template>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
 
-        <p class="slds-text-body_small slds-m-top_x-small">
-            Please verify column names and data before importing.
-        </p>
-    </div>
-</template>
+                        <p class="slds-text-body_small slds-m-top_x-small">
+                            Please verify column names and data before importing.
+                        </p>
+                    </div>
+                    <!-- ========================= -->
+                    <!-- CSV Mapping -->
+                    <!-- ========================= -->
+                    <div class="slds-m-top_large">
+                        <h3 class="slds-text-heading_small slds-m-bottom_small">
+                            CSV Column Mapping (optional)
+                        </h3>
+
+                        <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+                            <thead>
+                                <tr>
+                                    <th>CSV Column</th>
+                                    <th>Salesforce Field</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template for:each={mappingRows} for:item="row">
+                                    <tr key={row.header}>
+                                        <td>{row.header}</td>
+                                        <td>
+                                            <lightning-combobox
+                                                data-header={row.header}
+                                                value={row.mappedField}
+                                                options={row.options}
+                                                placeholder="Auto / Ignore"
+                                                onchange={handleMappingChange}>
+                                            </lightning-combobox>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+
+                        <p class="slds-text-body_small slds-m-top_x-small">
+                            Columns not mapped will use automatic matching (Label or API Name).
+                        </p>
+                    </div>
+                </template>
 
                 <lightning-button
                     label="Import CSV"

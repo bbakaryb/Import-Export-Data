@@ -18,9 +18,13 @@ export default class Lwc01_DataPorter extends LightningElement {
     // Preview
     previewHeaders = [];
     previewRows = [];
-    showPreview = false;
+    mappingRows = [];
+    
 
     MAX_PREVIEW_ROWS = 10;
+    showPreview = false;
+
+    userMapping = {}; // { csvHeader : apiName }
 
 
     /**
@@ -70,6 +74,8 @@ export default class Lwc01_DataPorter extends LightningElement {
         }
         // Recalculate indexes
         this.orderedFields = newOrdered.map((f, i) => ({ ...f, index: i }));
+        this.selectedFields = this.orderedFields.map(f => f.value);
+
     }
 
     /**
@@ -123,9 +129,10 @@ export default class Lwc01_DataPorter extends LightningElement {
 
         this.isLoading = true;
         try {
+            const orderedApiFields = this.orderedFields.map(f => f.value);
             const base64Data = await exportCsv({
                 objectName: this.selectedObject,
-                fields: this.selectedFields,
+                fields: orderedApiFields,
                 recordId: this.recordId
             });
 
@@ -163,6 +170,18 @@ export default class Lwc01_DataPorter extends LightningElement {
             return;
         }
 
+        if (!this.fields || !this.fields.length) {
+            this.dispatchEvent(
+                new ShowToastEvent({
+                    title: 'Fields not ready',
+                    message: 'Please wait for fields to load before importing.',
+                    variant: 'warning'
+                })
+            );
+            return;
+        }
+
+
         this.file = event.target.files[0];
 
         const reader = new FileReader();
@@ -172,11 +191,53 @@ export default class Lwc01_DataPorter extends LightningElement {
 
             this.previewHeaders = preview.headers;
             this.previewRows = preview.rows;
+            this.buildMappingModel();
             this.showPreview = true;
         };
 
         reader.readAsText(this.file);
     }
+
+    buildMappingModel() {
+        const labelToApi = new Map(
+            this.fields.map(f => [f.label.toLowerCase(), f.value])
+        );
+
+        const apiSet = new Set(this.fields.map(f => f.value));
+
+        this.mappingRows = this.previewHeaders.map(h => {
+            let autoMatch = '';
+
+            const normalized = h.toLowerCase();
+            if (labelToApi.has(normalized)) {
+                autoMatch = labelToApi.get(normalized);
+            } else if (apiSet.has(h)) {
+                autoMatch = h;
+            }
+
+            if (autoMatch) {
+                this.userMapping[h] = autoMatch;
+            }
+
+            return {
+                header: h,
+                mappedField: autoMatch,
+                options: this.fields
+            };
+        });
+    }
+
+    handleMappingChange(event) {
+        const header = event.target.dataset.header;
+        const value = event.detail.value;
+
+        this.userMapping[header] = value;
+
+        const row = this.mappingRows.find(r => r.header === header);
+        if (row) row.mappedField = value;
+    }
+
+
 
     resetPreview() {
         this.previewHeaders = [];
@@ -214,7 +275,8 @@ export default class Lwc01_DataPorter extends LightningElement {
 
             const result = await importCsv({
                 objectName: this.selectedObject,
-                base64Csv: base64Data
+                base64Csv: base64Data,
+                csvToFieldMap: Object.keys(this.userMapping).length ? this.userMapping : null
             });
 
             /* Validation errors */

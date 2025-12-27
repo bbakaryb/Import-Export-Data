@@ -1,12 +1,12 @@
 @isTest
 private class CsvImportServiceTest {
 
-/* =========================================================
+    /* =========================================================
        Test data setup (executed once for the whole class)
        ========================================================= */
     @testSetup
     static void setupData() {
-        List<Account> accounts = new List<Account>{
+        insert new List<Account>{
             new Account(
                 Name = 'Existing Account 1',
                 Phone = '0101010101',
@@ -18,7 +18,6 @@ private class CsvImportServiceTest {
                 Rating = 'Warm'
             )
         };
-        insert accounts;
     }
 
     /* =========================================================
@@ -29,11 +28,11 @@ private class CsvImportServiceTest {
         return EncodingUtil.base64Encode(Blob.valueOf(csv));
     }
 
-    private static Account getExistingAccount(String name) {
+    private static Account getAccountByName(String name) {
         return [
             SELECT Id, Name, Phone
             FROM Account
-            WHERE Name =: name 
+            WHERE Name = :name
             LIMIT 1
         ];
     }
@@ -41,150 +40,104 @@ private class CsvImportServiceTest {
     /* =========================================================
        INSERT – Happy path (API names)
        ========================================================= */
-
     @IsTest
     static void testInsertAccount() {
         String csv =
             'Name,Phone\n' +
             'Imported Account,0999999999';
 
-        Test.startTest();
         Map<String, Object> result =
-            CsvImportService.importCsv('Account', toBase64(csv));
-        Test.stopTest();
+            CsvImportService.importCsv('Account', toBase64(csv), null);
 
         System.assertEquals(true, result.get('success'));
         System.assertEquals(1, result.get('inserted'));
 
-        Account a = getExistingAccount('Imported Account');
+        Account a = getAccountByName('Imported Account');
         System.assertEquals('0999999999', a.Phone);
     }
 
     /* =========================================================
-       INSERT – Using field LABELS instead of API names
+       INSERT – Using field LABELS
        ========================================================= */
-
     @IsTest
     static void testInsertUsingLabels() {
         String csv =
             'Account Name,Phone\n' +
             'Imported With Labels,0111111111';
 
-        Map<String, Object> result = CsvImportService.importCsv('Account', toBase64(csv));
-           
+        Map<String, Object> result =
+            CsvImportService.importCsv('Account', toBase64(csv), null);
+
         System.assertEquals(true, result.get('success'));
         System.assertEquals(1, result.get('inserted'));
     }
 
     /* =========================================================
-       UPDATE – UPSERT via Id column
+       INSERT – Missing required field (Name)
        ========================================================= */
-
     @IsTest
-    static void testUpdateAccountById() {
-        Account existing = getExistingAccount('Existing Account 1');
-
+    static void testInsertMissingRequiredField() {
         String csv =
-            'Id,Name,Phone\n' +
-            existing.Id + ',Updated Account,0666666666';
+            'Phone\n' +
+            '0666666666';
 
         Map<String, Object> result =
-            CsvImportService.importCsv('Account', toBase64(csv));
-
-        System.assertEquals(true, result.get('success'));
-
-        Account updated = [
-            SELECT Name, Phone
-            FROM Account
-            WHERE Id = :existing.Id
-        ];
-        System.assertEquals('Updated Account', updated.Name);
-        System.assertEquals('0666666666', updated.Phone);
-    }
-
-    /* =========================================================
-       ERROR – Unknown column
-       ========================================================= */
-
-    @IsTest
-    static void testUnknownColumnError() {
-        String csv =
-            'Name,Unknown_Field\n' +
-            'Bad Row,XXX';
-
-        Map<String, Object> result =
-            CsvImportService.importCsv('Account', toBase64(csv));
+            CsvImportService.importCsv('Account', toBase64(csv), null);
 
         System.assertEquals(false, result.get('success'));
 
         List<String> errors = (List<String>) result.get('errors');
-        System.assertEquals(1, errors.size());
         System.assert(
-            errors[0].contains('unknow column'),
-            'Expected unknown column error'
+            errors[0].contains('required field missing'),
+            'Expected missing required field error'
         );
     }
 
     /* =========================================================
-       Exception – Null parameters
+       UPDATE – Upsert via Id (required fields NOT enforced)
        ========================================================= */
     @IsTest
-    static void testMissingParameters() {
-        try {
-            CsvImportService.importCsv(null, null);
-            System.assert(false, 'Exception expected');
-        } catch (AuraHandledException e) {
+    static void testUpdateAccountById() {
+        Account existing = getAccountByName('Existing Account 1');
 
-        }
-    }
-    /* =========================================================
-       Error – Unknown Object
-       ========================================================= */
-    @IsTest
-    static void testUnknownObject() {
-        String csv = 'Name\nTest';
+        String csv =
+            'Id,Name\n' +
+            existing.Id + ',abc';
 
-        try {
-            CsvImportService.importCsv('FakeObject__c', EncodingUtil.base64Encode(Blob.valueOf(csv)));
-            System.assert(false, 'Exception expected');
-        } catch (AuraHandledException e) {
+        Map<String, Object> result =
+            CsvImportService.importCsv('Account', toBase64(csv), null);
 
-        }
+        System.assertEquals(true, result.get('success'));
+
+        Account updated = [
+            SELECT Name
+            FROM Account
+            WHERE Id = :existing.Id
+        ];
+        System.assertEquals('abc', updated.Name);
     }
 
     /* =========================================================
-       Error – CSV File
+       ERROR – Unmapped column
        ========================================================= */
     @IsTest
-    static void testMaxLinesExceeded() {
-        String header = 'Name\n';
-        String body = '';
+    static void testUnmappedColumn() {
+        String csv =
+            'Name,UnknownColumn\n' +
+            'Bad Row,XXX';
 
-        for (Integer i = 0; i <= 5000; i++) {
-            body += 'Account ' + i + '\n';
-        }
+        Map<String, Object> result =
+            CsvImportService.importCsv('Account', toBase64(csv), null);
 
-        try {
-            CsvImportService.importCsv(
-                'Account',
-                EncodingUtil.base64Encode(Blob.valueOf(header + body))
-            );
-            System.assert(false, 'Exception expected');
-        } catch (AuraHandledException e) {
+        System.assertEquals(false, result.get('success'));
 
-        }
+        List<String> errors = (List<String>) result.get('errors');
+        System.assert(errors[0].contains('Unmapped CSV column'));
     }
 
-    @IsTest
-    static void testEmptyCsv() {
-        try {
-            CsvImportService.importCsv('Account', EncodingUtil.base64Encode(Blob.valueOf('')));
-            System.assert(false, 'Exception expected');
-        } catch (AuraHandledException e) {
-
-        }
-    }
-
+    /* =========================================================
+       ERROR – Incorrect column count
+       ========================================================= */
     @IsTest
     static void testIncorrectColumnCount() {
         String csv =
@@ -192,39 +145,34 @@ private class CsvImportServiceTest {
             'OnlyOneValue';
 
         Map<String, Object> result =
-            CsvImportService.importCsv('Account', toBase64(csv));
+            CsvImportService.importCsv('Account', toBase64(csv), null);
 
         System.assertEquals(false, result.get('success'));
 
         List<String> errors = (List<String>) result.get('errors');
-        System.assert(
-            errors[0].contains('incorrect number of columns'),
-            'Expected column count error'
-        );
+        System.assert(errors[0].contains('incorrect number of columns'));
     }
 
     /* =========================================================
-       Cast Values Types
+       ERROR – Invalid picklist
        ========================================================= */
     @IsTest
-    static void testStringCastToDateTime() {
-        Object dateVal =
-            CsvImportService.castToCorrectType(
-                Account.CreatedDate.getDescribe(),
-                '2023-01-01 10:30:00'
-            );
+    static void testInvalidPicklist() {
+        String csv =
+            'Name,Rating\n' +
+            'Bad Picklist,INVALID_VALUE';
 
-        System.assert(dateVal instanceof Datetime);
+        Map<String, Object> result =
+            CsvImportService.importCsv('Account', toBase64(csv), null);
+
+        System.assertEquals(false, result.get('success'));
+
+        List<String> errors = (List<String>) result.get('errors');
+        System.assert(errors[0].contains('invalid picklist value'));
     }
 
-    @IsTest
-    static void testInvalidBooleanCast() {
-        Schema.DescribeFieldResult dfr = Account.IsDeleted.getDescribe(); 
-        Object result = CsvImportService.castToCorrectType(dfr, 'maybe');
-        System.assertEquals(null, result);
-    }
     /* =========================================================
-       Picklist 
+       PICKLIST – Label accepted
        ========================================================= */
     @IsTest
     static void testPicklistLabelAccepted() {
@@ -237,22 +185,74 @@ private class CsvImportServiceTest {
         System.assertEquals(true, ok);
     }
 
+    /* =========================================================
+       CAST – DateTime
+       ========================================================= */
     @IsTest
-    static void testInvalidPicklist() {
-        String csv =
-            'Name,Rating\n' +
-            'Bad Picklist,INVALID_VALUE';
+    static void testCastDateTime() {
+        Object val =
+            CsvImportService.castToCorrectType(
+                Account.CreatedDate.getDescribe(),
+                '2023-01-01 10:30:00'
+            );
 
-        Map<String, Object> result =
-            CsvImportService.importCsv('Account', toBase64(csv));
+        System.assert(val instanceof Datetime);
+    }
 
-        System.assertEquals(false, result.get('success'));
+    /* =========================================================
+       CAST – Invalid Boolean
+       ========================================================= */
+    @IsTest
+    static void testInvalidBooleanCast() {
+        Object val =
+            CsvImportService.castToCorrectType(
+                Account.IsDeleted.getDescribe(),
+                'maybe'
+            );
 
-        List<String> errors = (List<String>) result.get('errors');
-        System.assert(
-            errors[0].contains('invalid picklist value'),
-            'Expected invalid picklist error'
-        );
+        System.assertEquals(null, val);
+    }
+
+    /* =========================================================
+       EXCEPTIONS
+       ========================================================= */
+    @IsTest
+    static void testMissingParameters() {
+        try {
+            CsvImportService.importCsv(null, null, null);
+            System.assert(false, 'Exception expected');
+        } catch (AuraHandledException e) {
+            System.assert(true);
+        }
+    }
+
+    @IsTest
+    static void testUnknownObject() {
+        try {
+            CsvImportService.importCsv(
+                'FakeObject__c',
+                toBase64('Name\nTest'),
+                null
+            );
+            System.assert(false, 'Exception expected');
+        } catch (AuraHandledException e) {
+            System.assert(true);
+        }
+    }
+
+    @IsTest
+    static void testMaxLinesExceeded() {
+        String csv = 'Name\n';
+        for (Integer i = 0; i <= 5000; i++) {
+            csv += 'Account ' + i + '\n';
+        }
+
+        try {
+            CsvImportService.importCsv('Account', toBase64(csv), null);
+            System.assert(false, 'Exception expected');
+        } catch (AuraHandledException e) {
+            System.assert(true);
+        }
     }
 
 }

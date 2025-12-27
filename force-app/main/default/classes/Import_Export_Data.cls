@@ -13,8 +13,8 @@ public with sharing class Import_Export_Data {
      * Import CSV data
      */
     @AuraEnabled
-    public static Map<String, Object> importCsv(String objectName, String base64Csv) {
-        return CsvImportService.importCsv(objectName, base64Csv);
+    public static Map<String, Object> importCsv(String objectName, String base64Csv, Map<String, String> csvToFieldMap) {
+        return CsvImportService.importCsv(objectName, base64Csv, csvToFieldMap);
     }
 
     /**

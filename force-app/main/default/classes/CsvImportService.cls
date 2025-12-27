@@ -9,20 +9,18 @@ public with sharing class CsvImportService {
      * @param base64Csv  Base64-encoded CSV file content
      * @return Map containing success flag, errors or inserted count
      */
-    public static Map<String, Object> importCsv(String objectName, String base64Csv) {
+    public static Map<String, Object> importCsv(String objectName, String base64Csv, Map<String, String> csvToFieldMap) {
         if (String.isBlank(objectName) || String.isBlank(base64Csv)) {
             throw new AuraHandledException('Object name and CSV file are required.');
         }
 
         Boolean isUpdate = false; // INSERT by default
         
-
         List<String> errors = new List<String>();
         List<SObject> toInsert = new List<SObject>();
 
         /* === Decode CSV === */
         String csv = EncodingUtil.base64Decode(base64Csv).toString();
-
         List<String> lines = csv.replace('\r\n', '\n').replace('\r', '\n').split('\n');
 
         if (lines.isEmpty()) {
@@ -40,22 +38,71 @@ public with sharing class CsvImportService {
         Schema.DescribeSObjectResult dsr = sType.getDescribe();
         Map<String, Schema.SObjectField> fieldMap = dsr.fields.getMap();
 
-        /* === Mapping HEADER (label / api) → API NAME === */
-        Map<String, String> headerToApi = new Map<String, String>();
-        for (String api : fieldMap.keySet()) {
-            Schema.DescribeFieldResult dfr = fieldMap.get(api).getDescribe();
-            headerToApi.put(api.toLowerCase(), api);
-            headerToApi.put(dfr.getLabel().toLowerCase(), api);
-        }
-
         /* === CSV headers === */
         List<String> headers = new List<String>();
         for (String h : CsvUtils.parseLine(lines[0])) {
-            headers.add(h.replace('"', '').trim().toLowerCase());
+            headers.add(h.replace('\uFEFF','').replace('"','').trim());
         }
 
+        Set<String> headerSet = new Set<String>();
+        for (String h : headers) {
+            if (!headerSet.add(h.toLowerCase())) {
+                errors.add('Duplicate CSV column: "' + h + '"');
+            }
+        }
+
+        /* =========================================================
+           Automatic header → API mapping (Label / API)
+        ========================================================= */
+        Map<String, String> autoHeaderToApi = new Map<String, String>();
+        for (String api : fieldMap.keySet()) {
+            Schema.DescribeFieldResult dfr = fieldMap.get(api).getDescribe();
+            autoHeaderToApi.put(api.toLowerCase(), api);
+            autoHeaderToApi.put(dfr.getLabel().toLowerCase(), api);
+        }
+
+        /* =========================================================
+           FINAL header → API resolution
+        ========================================================= */
+        Map<String, String> resolvedHeaderToApi = new Map<String, String>();
+
+        Map<String, String> normalizedCsvMap = new Map<String, String>();
+        if (csvToFieldMap != null) {
+            for (String k : csvToFieldMap.keySet()) {
+                normalizedCsvMap.put(k.toLowerCase(), csvToFieldMap.get(k));
+            }
+        }
+
+
+        for (String h : headers) {
+            String normalized = h.toLowerCase();
+
+            // Explicit UI mapping (PRIORITY)
+            if (normalizedCsvMap != null && normalizedCsvMap.containsKey(normalized)) {
+                resolvedHeaderToApi.put(h, normalizedCsvMap.get(normalized));
+                continue;
+            }
+
+            // Automatic fallback
+            if (autoHeaderToApi.containsKey(normalized)) {
+                resolvedHeaderToApi.put(h, autoHeaderToApi.get(normalized));
+                continue;
+            }
+
+            // Blocking error
+            errors.add('Unmapped CSV column: "' + h + '"');
+        }
+
+        /* === STOP BEFORE DATA LOOP === */
+        if (!errors.isEmpty()) {
+            return new Map<String, Object>{
+                'success' => false,
+                'errors'  => errors
+            };
+        }
         // Presence of Id column enables update/upsert mode
-        isUpdate = headers.contains('id');
+        isUpdate = resolvedHeaderToApi.values().contains('Id');
+
 
         /* === Parse CSV data lines === */
         for (Integer i = 1; i < lines.size(); i++) {
@@ -65,7 +112,6 @@ public with sharing class CsvImportService {
             Integer lineNumber = i + 1;
             List<String> cols = CsvUtils.parseLine(line);
 
-            //if (cols.size() != headers.size()) continue;
             if (cols.size() != headers.size()) {
                 errors.add('Line ' + lineNumber + ' : incorrect number of columns.');
                 continue;
@@ -78,12 +124,12 @@ public with sharing class CsvImportService {
                 String header = headers[c];
                 String rawValue = cols[c].trim();
                 if(rawValue == null || rawValue == '' || String.isBlank(rawValue)) continue;
-                if (!headerToApi.containsKey(header)) {
+                if (!resolvedHeaderToApi.containsKey(header)) {
                     errors.add('Line ' + lineNumber + ' : unknow column "' + header + '"');
                     continue;
                 }
 
-                String apiField = headerToApi.get(header);
+                String apiField = resolvedHeaderToApi.get(header);
                 /* === special case : ID === */
                 if (apiField == 'Id') {
                     try {
@@ -138,6 +184,14 @@ public with sharing class CsvImportService {
             }
             // Ignore empty rows
             if (hasAtLeastOneValue) {
+                Map<String, Object> populated = record.getPopulatedFieldsAsMap();
+                // CSV import is strict: all required fields must be provided in the file
+                for (Schema.SObjectField sof : fieldMap.values()) {
+                    Schema.DescribeFieldResult df = sof.getDescribe();
+                    if (!isUpdate && !df.isNillable() && df.isCreateable() && !df.isDefaultedOnCreate() && !populated.containsKey(df.getName())) {
+                        errors.add('Line ' + lineNumber + ' : required field missing "' + df.getLabel() + '"  (not provided in CSV)');
+                    }
+                }
                 toInsert.add(record);
             }
             
@@ -150,6 +204,14 @@ public with sharing class CsvImportService {
                 'errors' => errors
             };
         }
+
+        if (toInsert.isEmpty()) {
+            return new Map<String, Object>{
+                'success' => false,
+                'errors'  => new List<String>{ 'No valid data rows found.' }
+            };
+        }
+
         /* === DML (upsert supports insert or update) === */
         Database.UpsertResult[] results = Database.upsert(toInsert, false);
         Integer success = 0;

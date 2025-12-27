@@ -55,7 +55,8 @@ private class Import_Export_DataTest {
         Map<String, Object> res =
             Import_Export_Data.importCsv(
                 'Account',
-                base64
+                base64,
+                null
             );
         Test.stopTest();
 
