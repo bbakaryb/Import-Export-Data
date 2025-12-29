@@ -1,12 +1,19 @@
 {
   "packageDirectories": [
     {
+      "versionName": "ver 0.1",
+      "versionNumber": "0.1.0.NEXT",
       "path": "force-app",
-      "default": true
+      "default": true,
+      "package": "dataporter",
+      "versionDescription": "DataPorter package enables CSV export and import of Salesforce records, directly from a record page"
     }
   ],
-  "name": "import_export_record",
   "namespace": "",
   "sfdcLoginUrl": "https://login.salesforce.com",
-  "sourceApiVersion": "64.0"
+  "sourceApiVersion": "64.0",
+  "packageAliases": {
+    "dataporter": "0Hod20000000VbhCAE",
+    "dataporter@0.1.0-1": "04td2000000FXN3AAO"
+  }
 }

@@ -20,17 +20,7 @@ public with sharing class CsvImportService {
         List<SObject> toInsert = new List<SObject>();
 
         /* === Decode CSV === */
-        String csv = EncodingUtil.base64Decode(base64Csv).toString();
-        List<String> lines = csv.replace('\r\n', '\n').replace('\r', '\n').split('\n');
-
-        if (lines.isEmpty()) {
-            throw new AuraHandledException('Csv file is empty.');
-        }
-        if (lines.size() - 1 > MAX_LINES) {
-            throw new AuraHandledException(
-                'CSV import limited to ' + MAX_LINES + ' lines.'
-            );
-        }
+        List<String> lines = decodeAndSplitCsv(base64Csv);
         /* === Object describe === */
         Schema.SObjectType sType = Schema.getGlobalDescribe().get(objectName);
         if (sType == null) throw new AuraHandledException('Unknow object: ' + objectName);
@@ -52,46 +42,9 @@ public with sharing class CsvImportService {
         }
 
         /* =========================================================
-           Automatic header → API mapping (Label / API)
+           header → API resolution
         ========================================================= */
-        Map<String, String> autoHeaderToApi = new Map<String, String>();
-        for (String api : fieldMap.keySet()) {
-            Schema.DescribeFieldResult dfr = fieldMap.get(api).getDescribe();
-            autoHeaderToApi.put(api.toLowerCase(), api);
-            autoHeaderToApi.put(dfr.getLabel().toLowerCase(), api);
-        }
-
-        /* =========================================================
-           FINAL header → API resolution
-        ========================================================= */
-        Map<String, String> resolvedHeaderToApi = new Map<String, String>();
-
-        Map<String, String> normalizedCsvMap = new Map<String, String>();
-        if (csvToFieldMap != null) {
-            for (String k : csvToFieldMap.keySet()) {
-                normalizedCsvMap.put(k.toLowerCase(), csvToFieldMap.get(k));
-            }
-        }
-
-
-        for (String h : headers) {
-            String normalized = h.toLowerCase();
-
-            // Explicit UI mapping (PRIORITY)
-            if (normalizedCsvMap != null && normalizedCsvMap.containsKey(normalized)) {
-                resolvedHeaderToApi.put(h, normalizedCsvMap.get(normalized));
-                continue;
-            }
-
-            // Automatic fallback
-            if (autoHeaderToApi.containsKey(normalized)) {
-                resolvedHeaderToApi.put(h, autoHeaderToApi.get(normalized));
-                continue;
-            }
-
-            // Blocking error
-            errors.add('Unmapped CSV column: "' + h + '"');
-        }
+        Map<String, String> resolvedHeaderToApi = resolveHeaders(headers, fieldMap, csvToFieldMap, errors);
 
         /* === STOP BEFORE DATA LOOP === */
         if (!errors.isEmpty()) {
@@ -149,23 +102,12 @@ public with sharing class CsvImportService {
                 try {
                     /* === PICKLIST : strict validation === */
                     if (dfr.getType() == Schema.DisplayType.Picklist || dfr.getType() == Schema.DisplayType.MultiPicklist) {
-                        if (!isValidPicklistValue(dfr, rawValue)) {
-                            errors.add('Line ' + lineNumber + ' – field "' + dfr.getLabel() + '" : invalid picklist value "' + rawValue + '"');
+                        if (!handlePicklist(record, dfr, apiField, rawValue, lineNumber, errors)) {
                             continue;
                         }
-                        if (dfr.getType() == Schema.DisplayType.MultiPicklist) {
-                            // Salesforce expects semicolon-separated values
-                            record.put(apiField, rawValue.replace(',', ';'));
-                            hasAtLeastOneValue = true;
-                            continue;
-                        }
-                        else {
-                            record.put(apiField, rawValue);
-                            hasAtLeastOneValue = true;
-                            continue;
-                        }
-                        
-                    }
+                        hasAtLeastOneValue = true;
+                        continue;
+                    }     
 
                     /* === Other field types (Boolean included) === */
                     Object typedValue = castToCorrectType(dfr, rawValue);
@@ -186,17 +128,13 @@ public with sharing class CsvImportService {
             if (hasAtLeastOneValue) {
                 Map<String, Object> populated = record.getPopulatedFieldsAsMap();
                 // CSV import is strict: all required fields must be provided in the file
-                for (Schema.SObjectField sof : fieldMap.values()) {
-                    Schema.DescribeFieldResult df = sof.getDescribe();
-                    if (!isUpdate && !df.isNillable() && df.isCreateable() && !df.isDefaultedOnCreate() && !populated.containsKey(df.getName())) {
-                        errors.add('Line ' + lineNumber + ' : required field missing "' + df.getLabel() + '"  (not provided in CSV)');
-                    }
+                if (!isUpdate) {
+                    validateRequiredFields(fieldMap, populated, lineNumber, errors);
                 }
-                toInsert.add(record);
-            }
-            
-        }
 
+                toInsert.add(record);
+            } 
+        }
         /* === STOP if errors === */
         if (!errors.isEmpty()) {
             return new Map<String, Object>{
@@ -204,14 +142,12 @@ public with sharing class CsvImportService {
                 'errors' => errors
             };
         }
-
         if (toInsert.isEmpty()) {
             return new Map<String, Object>{
                 'success' => false,
                 'errors'  => new List<String>{ 'No valid data rows found.' }
             };
         }
-
         /* === DML (upsert supports insert or update) === */
         Database.UpsertResult[] results = Database.upsert(toInsert, false);
         Integer success = 0;
@@ -294,6 +230,65 @@ public with sharing class CsvImportService {
         return null;
     }
 
+    public static Map<String, String> resolveHeaders(List<String> headers, Map<String, Schema.SObjectField> fieldMap, Map<String, String> csvToFieldMap, List<String> errors) {
+        Map<String, String> autoHeaderToApi = new Map<String, String>();
+        /* =========================================================
+           Automatic header → API mapping (Label / API)
+        ========================================================= */
+        for (String api : fieldMap.keySet()) {
+            Schema.DescribeFieldResult dfr = fieldMap.get(api).getDescribe();
+            autoHeaderToApi.put(api.toLowerCase(), api);
+            autoHeaderToApi.put(dfr.getLabel().toLowerCase(), api);
+        }
+
+        Map<String, String> normalizedCsvMap = new Map<String, String>();
+        if (csvToFieldMap != null) {
+            for (String k : csvToFieldMap.keySet()) {
+                normalizedCsvMap.put(k.toLowerCase(), csvToFieldMap.get(k));
+            }
+        }
+        /* =========================================================
+           FINAL header → API resolution
+        ========================================================= */
+        Map<String, String> resolved = new Map<String, String>();
+        for (String h : headers) {
+            String normalized = h.toLowerCase();
+            // Explicit UI mapping (PRIORITY)
+            if (normalizedCsvMap.containsKey(normalized)) {
+                resolved.put(h, normalizedCsvMap.get(normalized));
+            } // Automatic fallback
+            else if (autoHeaderToApi.containsKey(normalized)) {
+                resolved.put(h, autoHeaderToApi.get(normalized));
+            } // Blocking error
+            else {
+                errors.add('Unmapped CSV column: "' + h + '"');
+            }
+        }
+        return resolved;
+    }
+
+    public static Boolean handlePicklist(SObject record, Schema.DescribeFieldResult dfr, String apiField, String rawValue, Integer lineNumber, List<String> errors) {
+        if (!isValidPicklistValue(dfr, rawValue)) {
+            errors.add('Line ' + lineNumber + ' – field "' + dfr.getLabel() + '" : invalid picklist value "' + rawValue + '"');
+            return false;
+        }
+        if (dfr.getType() == Schema.DisplayType.MultiPicklist) {
+            record.put(apiField, rawValue.replace(',', ';'));
+        } else {
+            record.put(apiField, rawValue);
+        }
+        return true;
+    }
+
+    public static void validateRequiredFields(Map<String, Schema.SObjectField> fieldMap, Map<String, Object> populated, Integer lineNumber, List<String> errors) {
+        for (Schema.SObjectField sof : fieldMap.values()) {
+            Schema.DescribeFieldResult df = sof.getDescribe();
+            if (!df.isNillable() && df.isCreateable() && !df.isDefaultedOnCreate() && !populated.containsKey(df.getName())) {
+                errors.add('Line ' + lineNumber + ' : required field missing "' + df.getLabel() + '"  (not provided in CSV)');
+            }
+        }
+    }
+
     /**
      * Validate picklist values (label or value, active only)
      */
@@ -307,6 +302,21 @@ public with sharing class CsvImportService {
             }
         }
         return false;
+    }
+
+    public static List<String> decodeAndSplitCsv(String base64Csv) {
+        String csv = EncodingUtil.base64Decode(base64Csv).toString();
+        List<String> lines = csv.replace('\r\n', '\n').replace('\r', '\n').split('\n');
+
+        if (lines.isEmpty()) {
+            throw new AuraHandledException('Csv file is empty.');
+        }
+        if (lines.size() - 1 > MAX_LINES) {
+            throw new AuraHandledException(
+                'CSV import limited to ' + MAX_LINES + ' lines.'
+            );
+        }
+        return lines;
     }
 
 }

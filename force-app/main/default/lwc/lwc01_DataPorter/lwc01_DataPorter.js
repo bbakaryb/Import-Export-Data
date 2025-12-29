@@ -49,6 +49,167 @@ export default class Lwc01_DataPorter extends LightningElement {
         }
     }
 
+/**
+     * Export records to CSV
+     */
+    async handleExport() {
+        if (!this.selectedFields.length) {
+            this.dispatchEvent(new ShowToastEvent({
+                title: 'Error',
+                message: 'Please select at least one field before exporting.',
+                variant: 'error'
+            }));
+            return;
+        }
+
+        this.isLoading = true;
+        try {
+            const orderedApiFields = this.orderedFields.map(f => f.value);
+            const base64Data = await exportCsv({
+                objectName: this.selectedObject,
+                fields: orderedApiFields,
+                recordId: this.recordId
+            });
+
+            const blobUrl = 'data:application/octet-stream;base64,' + base64Data;
+            const link = document.createElement('a');
+            link.href = blobUrl;
+            link.download = `${this.selectedObject}_export.csv`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            this.dispatchEvent(new ShowToastEvent({
+                title: 'Success',
+                message: 'CSV exported successfully',
+                variant: 'success'
+            }));
+        } catch (error) {
+            console.error(error);
+            this.dispatchEvent(new ShowToastEvent({
+                title: 'Error',
+                message: error.body?.message || error.message,
+                variant: 'error'
+            }));
+        } finally {
+            this.isLoading = false;
+        }
+    }
+
+    /**
+     * Import CSV file into Salesforce
+     */
+    async handleImport() {
+        if (!this.file) {
+            alert('Selected CSV file.');
+            return;
+        }
+
+        const reader = new FileReader();
+
+        reader.onload = async () => {
+            try {
+
+                const arrayBuffer = reader.result;
+
+                // Conversion ArrayBuffer → Base64 
+                let binary = '';
+                const bytes = new Uint8Array(arrayBuffer);
+                const len = bytes.byteLength;
+
+                for (let i = 0; i < len; i++) {
+                    binary += String.fromCharCode(bytes[i]);
+                }
+
+                const base64Data = btoa(binary);
+
+                const result = await importCsv({
+                    objectName: this.selectedObject,
+                    base64Csv: base64Data,
+                    csvToFieldMap: Object.keys(this.userMapping).length ? this.userMapping : null
+                });
+
+                /* Validation errors */
+                if (result.success === false) {
+                    const errorMessage =
+                        result.errors && result.errors.length
+                            ? result.errors.join('\n')
+                            : 'Unknown CSV validation errors.';
+
+                    this.dispatchEvent(
+                        new ShowToastEvent({
+                            title: 'Import cancelled',
+                            message: errorMessage,
+                            variant: 'error',
+                            mode: 'sticky'
+                        })
+                    );
+                    return;
+                }
+
+                /* Success */
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Import completed',
+                        message: `${result.inserted} records imported successfully.`,
+                        variant: 'success'
+                    })
+                );
+
+            } catch (error) {
+                console.error(error);
+
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Server error',
+                        message: error.body ? error.body.message : error.message,
+                        variant: 'error',
+                        mode: 'sticky'
+                    })
+                );
+            }
+        };
+
+        reader.readAsArrayBuffer(this.file);
+    }
+
+/**
+     * Store selected CSV file
+     */
+    handleFileChange(event) {
+        if (event.target.files.length === 0) {
+            this.resetPreview();
+            return;
+        }
+
+        if (!this.fields || !this.fields.length) {
+            this.dispatchEvent(
+                new ShowToastEvent({
+                    title: 'Fields not ready',
+                    message: 'Please wait for fields to load before importing.',
+                    variant: 'warning'
+                })
+            );
+            return;
+        }
+
+
+        this.file = event.target.files[0];
+
+        const reader = new FileReader();
+        reader.onload = () => {
+            const text = reader.result;
+            const preview = this.parseCsv(text);
+
+            this.previewHeaders = preview.headers;
+            this.previewRows = preview.rows;
+            this.buildMappingModel();
+            this.showPreview = true;
+        };
+
+        reader.readAsText(this.file);
+    }
+
     /**
      * Handle selection changes in the dual-listbox
      * Maintain field order and display labels instead of API names
@@ -114,90 +275,8 @@ export default class Lwc01_DataPorter extends LightningElement {
         this.selectedFields = this.orderedFields.map(f => f.value);
     }
 
-    /**
-     * Export records to CSV
-     */
-    async handleExport() {
-        if (!this.selectedFields.length) {
-            this.dispatchEvent(new ShowToastEvent({
-                title: 'Error',
-                message: 'Please select at least one field before exporting.',
-                variant: 'error'
-            }));
-            return;
-        }
-
-        this.isLoading = true;
-        try {
-            const orderedApiFields = this.orderedFields.map(f => f.value);
-            const base64Data = await exportCsv({
-                objectName: this.selectedObject,
-                fields: orderedApiFields,
-                recordId: this.recordId
-            });
-
-            const blobUrl = 'data:application/octet-stream;base64,' + base64Data;
-            const link = document.createElement('a');
-            link.href = blobUrl;
-            link.download = `${this.selectedObject}_export.csv`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-
-            this.dispatchEvent(new ShowToastEvent({
-                title: 'Success',
-                message: 'CSV exported successfully',
-                variant: 'success'
-            }));
-        } catch (error) {
-            console.error(error);
-            this.dispatchEvent(new ShowToastEvent({
-                title: 'Error',
-                message: error.body?.message || error.message,
-                variant: 'error'
-            }));
-        } finally {
-            this.isLoading = false;
-        }
-    }
-
-    /**
-     * Store selected CSV file
-     */
-    handleFileChange(event) {
-        if (event.target.files.length === 0) {
-            this.resetPreview();
-            return;
-        }
-
-        if (!this.fields || !this.fields.length) {
-            this.dispatchEvent(
-                new ShowToastEvent({
-                    title: 'Fields not ready',
-                    message: 'Please wait for fields to load before importing.',
-                    variant: 'warning'
-                })
-            );
-            return;
-        }
-
-
-        this.file = event.target.files[0];
-
-        const reader = new FileReader();
-        reader.onload = () => {
-            const text = reader.result;
-            const preview = this.parseCsv(text);
-
-            this.previewHeaders = preview.headers;
-            this.previewRows = preview.rows;
-            this.buildMappingModel();
-            this.showPreview = true;
-        };
-
-        reader.readAsText(this.file);
-    }
-
+    
+    
     buildMappingModel() {
         const labelToApi = new Map(
             this.fields.map(f => [f.label.toLowerCase(), f.value])
@@ -246,140 +325,60 @@ export default class Lwc01_DataPorter extends LightningElement {
     }
 
 
-    /**
-     * Import CSV file into Salesforce
-     */
-    async handleImport() {
-    if (!this.file) {
-        alert('Selected CSV file.');
-        return;
-    }
+    
 
-    const reader = new FileReader();
+    parseCsv(text) {
+        const lines = text
+            .replace(/\r\n/g, '\n')
+            .replace(/\r/g, '\n')
+            .split('\n')
+            .filter(l => l.trim());
 
-    reader.onload = async () => {
-        try {
-
-            const arrayBuffer = reader.result;
-
-            // Conversion ArrayBuffer → Base64 
-            let binary = '';
-            const bytes = new Uint8Array(arrayBuffer);
-            const len = bytes.byteLength;
-
-            for (let i = 0; i < len; i++) {
-                binary += String.fromCharCode(bytes[i]);
-            }
-
-            const base64Data = btoa(binary);
-
-            const result = await importCsv({
-                objectName: this.selectedObject,
-                base64Csv: base64Data,
-                csvToFieldMap: Object.keys(this.userMapping).length ? this.userMapping : null
-            });
-
-            /* Validation errors */
-            if (result.success === false) {
-                const errorMessage =
-                    result.errors && result.errors.length
-                        ? result.errors.join('\n')
-                        : 'Unknown CSV validation errors.';
-
-                this.dispatchEvent(
-                    new ShowToastEvent({
-                        title: 'Import cancelled',
-                        message: errorMessage,
-                        variant: 'error',
-                        mode: 'sticky'
-                    })
-                );
-                return;
-            }
-
-            /* Success */
-            this.dispatchEvent(
-                new ShowToastEvent({
-                    title: 'Import completed',
-                    message: `${result.inserted} records imported successfully.`,
-                    variant: 'success'
-                })
-            );
-
-        } catch (error) {
-            console.error(error);
-
-            this.dispatchEvent(
-                new ShowToastEvent({
-                    title: 'Server error',
-                    message: error.body ? error.body.message : error.message,
-                    variant: 'error',
-                    mode: 'sticky'
-                })
-            );
+        if (!lines.length) {
+            return { headers: [], rows: [] };
         }
-    };
 
-    reader.readAsArrayBuffer(this.file);
-}
+        const parseLine = (line) => {
+            const result = [];
+            let current = '';
+            let inQuotes = false;
 
-parseCsv(text) {
-    const lines = text
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n')
-        .split('\n')
-        .filter(l => l.trim());
+            for (let i = 0; i < line.length; i++) {
+                const c = line[i];
 
-    if (!lines.length) {
-        return { headers: [], rows: [] };
-    }
-
-    const parseLine = (line) => {
-        const result = [];
-        let current = '';
-        let inQuotes = false;
-
-        for (let i = 0; i < line.length; i++) {
-            const c = line[i];
-
-            if (c === '"') {
-                if (inQuotes && line[i + 1] === '"') {
-                    current += '"';
-                    i++;
+                if (c === '"') {
+                    if (inQuotes && line[i + 1] === '"') {
+                        current += '"';
+                        i++;
+                    } else {
+                        inQuotes = !inQuotes;
+                    }
+                } else if (c === ',' && !inQuotes) {
+                    result.push(current);
+                    current = '';
                 } else {
-                    inQuotes = !inQuotes;
+                    current += c;
                 }
-            } else if (c === ',' && !inQuotes) {
-                result.push(current);
-                current = '';
-            } else {
-                current += c;
             }
+            result.push(current);
+            return result.map(v => v.replace(/^"|"$/g, '').trim());
+        };
+
+        const headers = parseLine(lines[0]);
+
+        const rows = [];
+        for (let i = 1; i < lines.length && rows.length < this.MAX_PREVIEW_ROWS; i++) {
+            const values = parseLine(lines[i]);
+
+            rows.push({
+                _rowKey: i,
+                cells: headers.map((h, idx) => ({
+                    key: h,
+                    value: values[idx] || ''
+                }))
+            });
         }
-        result.push(current);
-        return result.map(v => v.replace(/^"|"$/g, '').trim());
-    };
 
-    const headers = parseLine(lines[0]);
-
-    const rows = [];
-    for (let i = 1; i < lines.length && rows.length < this.MAX_PREVIEW_ROWS; i++) {
-        const values = parseLine(lines[i]);
-
-        rows.push({
-            _rowKey: i,
-            cells: headers.map((h, idx) => ({
-                key: h,
-                value: values[idx] || ''
-            }))
-        });
+        return { headers, rows };
     }
-
-    return { headers, rows };
-}
-
-
-
-
-
 }
